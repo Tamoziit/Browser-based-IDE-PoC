@@ -4,7 +4,7 @@
   "description": "Browser-based IDE PoC",
   "main": "src/server.ts",
   "scripts": {
-    "dev": "nodemon src/server.ts",
+    "dev": "tsx watch src/server.ts",
     "build": "npm install --include=dev && tsc",
     "start": "node dist/server.js"
   },
@@ -14,6 +14,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dockerode": "^4.0.2",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "ioredis": "^5.3.2",
     "mongoose": "^8.3.4",

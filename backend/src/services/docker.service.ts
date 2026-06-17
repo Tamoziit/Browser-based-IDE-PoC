@@ -2,7 +2,7 @@ import Docker from "dockerode";
 import { v4 as uuid } from "uuid";
 import path from "path";
 import fs from "fs/promises";
-import type { LabSession } from "../types/index.js";
+import type { LabSession } from "../types/index.d.ts";
 import { redis, SESSION_TTL } from "../config/redis.js";
 import Session from "../models/session.model.js";
 import { PassThrough } from "stream";

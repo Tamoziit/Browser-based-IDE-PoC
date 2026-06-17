@@ -22,3 +22,31 @@ export interface LabSession {
     runtime: string;
     lastActivity: number;
 }
+
+export interface LabCreationProps {
+    userId: string;
+    labId: string;
+    runtime?: string;
+}
+
+export interface SessionParams {
+    sessionId: string;
+}
+
+export interface FileContentProps {
+    path: string;
+    content?: string;
+}
+
+export interface ResizeMessage {
+    type: "resize";
+    cols: number;
+    rows: number;
+}
+
+export interface InputMessage {
+    type: "input";
+    data: string;
+}
+
+export type WsMessage = ResizeMessage | InputMessage;
