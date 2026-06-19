@@ -1,10 +1,13 @@
 import express, { type Request, type Response } from "express";
 import type { LabCreationProps, SessionParams } from "../types/index.d.ts";
 import { getSession, runCode, startLab, stopLab } from "../services/docker.service.js";
+import { blockDownload } from "../middleware/permissions.js";
 
 const router = express.Router();
 
-// POST /api/labs/start  { userId, labId, runtime? }
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/labs/start  { userId, labId, runtime?, labType? }
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/labs/start",
     async (
@@ -14,16 +17,24 @@ router.post(
         const {
             userId,
             labId,
-            runtime = "python"
+            runtime = "python",
+            labType = "RWX"
         }: LabCreationProps = req.body;
 
         if (!userId || !labId) {
             res.status(400).json({ error: "userId and labId are required" });
+            return;
+        }
+
+        // Validate labType value
+        if (labType !== "RO_EXEC" && labType !== "RWX") {
+            res.status(400).json({ error: "labType must be 'RO_EXEC' or 'RWX'" });
+            return;
         }
 
         try {
-            const sessionId = await startLab(userId, labId, runtime);
-            res.status(201).json({ sessionId });
+            const sessionId = await startLab(userId, labId, runtime, labType);
+            res.status(201).json({ sessionId, labType });
         } catch (error: any) {
             console.error("[Route] startLab error:", error);
             res.status(500).json({ error: error.message });
@@ -31,7 +42,9 @@ router.post(
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/labs/:sessionId
+// ─────────────────────────────────────────────────────────────────────────────
 router.get(
     "/labs/:sessionId",
     async (
@@ -42,13 +55,16 @@ router.get(
 
         if (!session) {
             res.status(404).json({ error: "Session not found" });
+            return;
         }
 
         return res.status(200).json(session);
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/labs/:sessionId/run
+// ─────────────────────────────────────────────────────────────────────────────
 router.post(
     "/labs/:sessionId/run",
     async (
@@ -60,6 +76,7 @@ router.post(
 
             if (!output) {
                 res.status(404).json({ error: "Error in producing output" });
+                return;
             }
 
             res.status(200).json({ output });
@@ -69,7 +86,9 @@ router.post(
     }
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
 // DELETE /api/labs/:sessionId
+// ─────────────────────────────────────────────────────────────────────────────
 router.delete(
     "/labs/:sessionId",
     async (
@@ -77,9 +96,15 @@ router.delete(
         res: Response
     ) => {
         await stopLab(req.params.sessionId);
-
         res.status(200).json({ ok: true });
     }
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/labs/export/*  →  403 for ALL lab types
+// Catch-all export/archive download attempt via the labs namespace
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/labs/export/*", blockDownload);
+router.post("/labs/export/*", blockDownload);
 
 export default router;

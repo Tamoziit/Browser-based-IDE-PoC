@@ -1,5 +1,7 @@
 import type { OnChange } from "@monaco-editor/react";
 
+export type LabType = "RO_EXEC" | "RWX";
+
 export interface FileEntry {
     name: string;
     type: "file" | "dir";
@@ -13,6 +15,7 @@ export interface MonacoEditorProps {
     language: string;
     value: string;
     onChange: OnChange;
+    readOnly?: boolean;
 }
 
 export interface FileTreeProps {
@@ -20,6 +23,7 @@ export interface FileTreeProps {
     selectedFile: string;
     onSelect: (name: string) => void;
     onRefresh?: () => void;
+    labType: LabType;
 }
 
 export type TabId = "terminal" | "output";

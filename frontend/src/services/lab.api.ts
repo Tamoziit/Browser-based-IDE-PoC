@@ -1,17 +1,18 @@
-import type { FileEntry } from "../interfaces";
+import type { FileEntry, LabType } from "../interfaces";
 
 const BASE = "/api";
 
 export const labApi = {
-    async startLab(userId: string, labId: string, runtime = "python"): Promise<{ sessionId: string }> {
+    async startLab(userId: string, labId: string, labType: LabType, runtime = "python"): Promise<{ sessionId: string; labType: LabType }> {
         const res = await fetch(`${BASE}/labs/start`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, labId, runtime }),
+            body: JSON.stringify({ userId, labId, runtime, labType }),
         });
         if (!res.ok) throw new Error(await res.text());
         return res.json();
     },
+
 
     async stopLab(sessionId: string): Promise<void> {
         await fetch(`${BASE}/labs/${sessionId}`, { method: "DELETE" });

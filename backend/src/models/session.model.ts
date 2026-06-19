@@ -28,6 +28,12 @@ const SessionSchema = new mongoose.Schema<ISession>({
         type: String,
         required: true
     },
+    labType: {
+        type: String,
+        enum: ["RO_EXEC", "RWX"],
+        required: true,
+        default: "RWX"
+    },
     workspaceSnapshot: {
         type: String
     },
@@ -42,4 +48,4 @@ const SessionSchema = new mongoose.Schema<ISession>({
 }, { timestamps: true });
 
 const Session = mongoose.model<ISession>("Session", SessionSchema);
-export default Session;
+export default Session;

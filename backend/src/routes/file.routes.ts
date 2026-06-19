@@ -3,6 +3,13 @@ import path from "path";
 import fs from "fs/promises";
 import { getSession, refreshSession } from "../services/docker.service.js";
 import type { FileContentProps } from "../types/index.d.ts";
+import {
+    blockDownload,
+    enforceCreatePermission,
+    enforceDeletePermission,
+    enforceExportPermission,
+    enforceWritePermission,
+} from "../middleware/permissions.js";
 
 const router = express.Router();
 
@@ -31,7 +38,15 @@ async function resolveSessionOrFail(
     return { workspacePath: session.workspacePath, sessionId };
 }
 
-// GET /api/files?session=<id>
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/file/download  →  403 for ALL lab types
+// Must be registered before the generic GET /api/file handler
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/file/download", blockDownload);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/files?session=<id>  →  list workspace entries
+// ─────────────────────────────────────────────────────────────────────────────
 router.get("/files", async (req: Request, res: Response) => {
     const ctx = await resolveSessionOrFail(req.query.session as string, res);
     if (!ctx) return;
@@ -49,8 +64,12 @@ router.get("/files", async (req: Request, res: Response) => {
     }
 });
 
-// GET /api/file?session=<id>&path=main.py
-router.get("/file", async (req: Request, res: Response) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/file?session=<id>&path=main.py[&purpose=export]
+//   purpose=export  →  blocked for RO_EXEC
+//   (default read)  →  always allowed
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/file", enforceExportPermission, async (req: Request, res: Response) => {
     const ctx = await resolveSessionOrFail(req.query.session as string, res);
     if (!ctx) return;
 
@@ -68,8 +87,12 @@ router.get("/file", async (req: Request, res: Response) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
 // PUT /api/file?session=<id>&path=main.py  body: { content }
-router.put("/file", async (req: Request, res: Response) => {
+//   RO_EXEC  →  only .env allowed (enforced by middleware)
+//   RWX      →  any file
+// ─────────────────────────────────────────────────────────────────────────────
+router.put("/file", enforceWritePermission, async (req: Request, res: Response) => {
     const ctx = await resolveSessionOrFail(req.query.session as string, res);
     if (!ctx) return;
 
@@ -91,8 +114,12 @@ router.put("/file", async (req: Request, res: Response) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/file?session=<id>  body: { path, content? }
-router.post("/file", async (req: Request, res: Response) => {
+//   RO_EXEC  →  blocked entirely (no new files)
+//   RWX      →  create file
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/file", enforceCreatePermission, async (req: Request, res: Response) => {
     const ctx = await resolveSessionOrFail(req.query.session as string, res);
     if (!ctx) return;
 
@@ -113,8 +140,12 @@ router.post("/file", async (req: Request, res: Response) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
 // DELETE /api/file?session=<id>&path=notes.txt
-router.delete("/file", async (req: Request, res: Response) => {
+//   RO_EXEC  →  blocked entirely
+//   RWX      →  delete file
+// ─────────────────────────────────────────────────────────────────────────────
+router.delete("/file", enforceDeletePermission, async (req: Request, res: Response) => {
     const ctx = await resolveSessionOrFail(req.query.session as string, res);
     if (!ctx) return;
 

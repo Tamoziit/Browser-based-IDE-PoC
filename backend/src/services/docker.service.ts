@@ -2,7 +2,7 @@ import Docker from "dockerode";
 import { v4 as uuid } from "uuid";
 import path from "path";
 import fs from "fs/promises";
-import type { LabSession } from "../types/index.d.ts";
+import type { LabSession, LabType } from "../types/index.d.ts";
 import { redis, SESSION_TTL } from "../config/redis.js";
 import Session from "../models/session.model.js";
 import { PassThrough } from "stream";
@@ -17,8 +17,23 @@ const RUNTIME_IMAGES: Record<string, string> = {
 export const startLab = async (
     userId: string,
     labId: string,
-    runtime: string = "python"
+    runtime: string = "python",
+    labType: LabType = "RWX"
 ): Promise<string> => {
+    // ── Idempotency Check ────────────────────────────────────────────────────
+    // If a RUNNING session already exists for this user+lab combination, reuse it
+    // instead of spawning a duplicate container. (Protects against concurrent calls)
+    const existingSession = await Session.findOne({
+        userId,
+        labId,
+        status: "RUNNING"
+    });
+
+    if (existingSession) {
+        console.log(`[Lab] Reusing existing session=${existingSession.sessionId} labType=${labType} container=${existingSession.containerId.slice(0, 12)}`);
+        return existingSession.sessionId;
+    }
+
     const image = RUNTIME_IMAGES[runtime];
     if (!image) throw new Error(`Unknown runtime: ${runtime}`);
 
@@ -49,9 +64,20 @@ export const startLab = async (
         OpenStdin: true,
         WorkingDir: "/workspace",
         HostConfig: {
-            Binds: [`${workspacePath}:/workspace`],
+            Binds: [
+                labType === "RO_EXEC"
+                    ? `${workspacePath}:/workspace:ro`
+                    : `${workspacePath}:/workspace`
+            ],
             AutoRemove: false,
-            NetworkMode: "none"
+            NetworkMode: "none",
+            // RO_EXEC: make the entire container root FS read-only at the
+            // kernel level.  /tmp is re-mounted as an in-memory tmpfs so
+            // bash internal operations (history, completion) still work.
+            ...(labType === "RO_EXEC" && {
+                ReadonlyRootfs: true,
+                Tmpfs: { "/tmp": "size=64m,mode=1777" },
+            }),
         }
     });
 
@@ -65,6 +91,7 @@ export const startLab = async (
         containerId: container.id,
         workspacePath,
         runtime,
+        labType,
         lastActivity: Date.now(),
     };
 
@@ -81,12 +108,13 @@ export const startLab = async (
         userId,
         labId,
         runtime,
+        labType,
         containerId: container.id,
         workspacePath,
         status: "RUNNING",
     });
 
-    console.log(`[Lab] Started session=${sessionId} container=${container.id.slice(0, 12)}`);
+    console.log(`[Lab] Started session=${sessionId} labType=${labType} container=${container.id.slice(0, 12)}`);
     return sessionId;
 }
 
