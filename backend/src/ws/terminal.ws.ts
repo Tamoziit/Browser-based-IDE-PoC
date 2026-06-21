@@ -2,6 +2,7 @@ import type { IncomingMessage, Server } from "http";
 import WebSocket, { WebSocketServer } from "ws";
 import { getSession, refreshSession } from "../services/docker.service.js";
 import * as pty from "node-pty";
+import { posix as posixPath } from "path";
 import type { WsMessage } from "../types/index.d.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,15 +62,69 @@ function isFsMutating(line: string): string | null {
 }
 
 // ANSI helpers
-const RED    = "\x1b[31m";
+const RED = "\x1b[31m";
 const YELLOW = "\x1b[33m";
-const RESET  = "\x1b[0m";
-const BELL   = "\x07";
+const RESET = "\x1b[0m";
+const BELL = "\x07";
 
 function buildErrorBanner(reason: string): string {
     return (
         `\r\n${RED}[RO_EXEC] Blocked: ${reason}.${RESET}\r\n` +
         `${YELLOW}Hint: This is a Read-Only lab — filesystem modifications are not allowed.${RESET}\r\n`
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workspace confinement
+// ─────────────────────────────────────────────────────────────────────────────
+
+const WORKSPACE_ROOT = "/workspace";
+const CONTAINER_HOME = "/root";   // default $HOME for root inside Docker
+
+/**
+ * If `line` is a plain `cd` command, returns the argument string
+ * (empty string for a bare `cd` with no args).
+ * Returns null if the line is not a cd command.
+ */
+function parseCdArg(line: string): string | null {
+    // Matches: cd, cd <arg>  — but NOT cdx or cd-something
+    const m = line.match(/^\s*cd(?:\s+(.*))?$/);
+    if (!m) return null;
+    return (m[1] ?? "").trim();
+}
+
+/**
+ * Resolve what the new CWD would become after `cd <arg>` from `current`.
+ * Handles absolute paths, relative paths, bare `cd`, and `cd ~`.
+ */
+function resolveNewCwd(current: string, arg: string): string {
+    if (!arg || arg === "~") return CONTAINER_HOME;
+    if (arg.startsWith("~/")) {
+        return posixPath.normalize(CONTAINER_HOME + "/" + arg.slice(2));
+    }
+    if (arg.startsWith("/")) {
+        return posixPath.normalize(arg);
+    }
+    return posixPath.normalize(posixPath.join(current, arg));
+}
+
+/** Returns true when `p` is /workspace itself or a descendant. */
+function isInsideWorkspace(p: string): boolean {
+    const n = posixPath.normalize(p);
+    return n === WORKSPACE_ROOT || n.startsWith(WORKSPACE_ROOT + "/");
+}
+
+function buildCdBlockedBanner(resolved: string): string {
+    return (
+        `\r\n${RED}[SANDBOX] Blocked: \"${resolved}\" is outside /workspace.${RESET}\r\n` +
+        `${YELLOW}You are confined to /workspace and its subdirectories.${RESET}\r\n`
+    );
+}
+
+function buildCwdErrorBanner(cwd: string): string {
+    return (
+        `\r\n${RED}[SANDBOX] Error: current directory \"${cwd}\" is outside /workspace.${RESET}\r\n` +
+        `${YELLOW}Returning to /workspace…${RESET}\r\n`
     );
 }
 
@@ -104,7 +159,11 @@ const initTerminalWS = (httpServer: Server): void => {
         // Spawn docker exec bash PTY
         let ptyProc: pty.IPty;
         try {
-            ptyProc = pty.spawn("docker", ["exec", "-it", session.containerId, "bash"], {
+            ptyProc = pty.spawn("docker", [
+                "exec", "-it",
+                "--workdir", WORKSPACE_ROOT,   // always start inside /workspace
+                session.containerId, "bash"
+            ], {
                 name: "xterm-256color",
                 cols: 120,
                 rows: 40,
@@ -130,23 +189,22 @@ const initTerminalWS = (httpServer: Server): void => {
             }
         });
 
-        // ── Per-connection line buffer (RO_EXEC only) ─────────────────────────
-        // We accumulate typed characters into `lineBuffer`.  When the user
-        // presses Enter (\r or \n) we scan the buffer; if it matches a
-        // blocked pattern we:
-        //   1. Send a red error banner back to the browser terminal
-        //   2. Discard the Enter — the shell never receives the command
-        //   3. Clear the buffer
-        // If the line is safe we flush the buffer + Enter to the PTY normally.
+        // ── Per-connection line buffer ─────────────────────────────────────────
+        // All input (both RWX and RO_EXEC) is buffered character-by-character.
+        // On Enter we inspect the assembled line before forwarding it to the PTY:
+        //
+        //   1. Workspace confinement  — cd commands are resolved and blocked if
+        //      they would escape /workspace; any other command is blocked when
+        //      the tracked CWD is already outside /workspace.
+        //   2. RO_EXEC FS-mutation check — applied on top of confinement.
+        //
+        // Non-printable control sequences (ESC, Ctrl-C, etc.) are forwarded
+        // immediately as before.
         let lineBuffer = "";
+        let trackedCwd = WORKSPACE_ROOT;   // server-side CWD mirror
+        let previousCwd = WORKSPACE_ROOT;   // for `cd -`
 
         function handleInput(data: string): void {
-            if (!isRoExec) {
-                // RWX — pass everything straight through
-                ptyProc.write(data);
-                return;
-            }
-
             for (const ch of data) {
                 const code = ch.charCodeAt(0);
 
@@ -171,30 +229,71 @@ const initTerminalWS = (httpServer: Server): void => {
                     return;
                 }
 
-                // Enter key (CR or LF)
+                // ── Enter key (CR or LF) ────────────────────────────────────────
                 if (ch === "\r" || ch === "\n") {
-                    const reason = isFsMutating(lineBuffer);
-                    if (reason) {
-                        console.warn(
-                            `[WS][RO_EXEC] Blocked command="${lineBuffer.trim()}" ` +
-                            `session=${sessionId} reason=${reason}`
-                        );
-                        // ── CRITICAL: do NOT write \r to the PTY ──────────────
-                        // \r in bash readline means "execute".  If we send it,
-                        // the command runs before \x03 can cancel anything.
-                        //
-                        // Instead:
-                        //  1. Ctrl+U (\x15) — kills bash readline buffer silently,
-                        //     no "^C" noise, no new prompt line from the PTY.
-                        //  2. We move the browser cursor ourselves via ws.send so
-                        //     the user sees the error below their typed line.
-                        ptyProc.write("\x15");             // wipe readline buffer
-                        ws.send("\r\n" + buildErrorBanner(reason) + BELL);
-                    } else {
-                        // Safe — forward Enter to PTY normally
-                        ptyProc.write(ch);
-                    }
+                    const line = lineBuffer.trim();
                     lineBuffer = "";
+
+                    // ── 1. Workspace confinement: cd ────────────────────────────
+                    // Intercept `cd` before anything else so the user can always
+                    // type `cd /workspace` to recover even if CWD drifted outside.
+                    const cdArg = parseCdArg(line);
+                    if (cdArg !== null) {
+                        const newCwd = cdArg === "-"
+                            ? previousCwd
+                            : resolveNewCwd(trackedCwd, cdArg);
+
+                        if (!isInsideWorkspace(newCwd)) {
+                            console.warn(
+                                `[WS][SANDBOX] Blocked cd target="${newCwd}" ` +
+                                `session=${sessionId}`
+                            );
+                            ptyProc.write("\x15");   // wipe readline buffer
+                            ws.send("\r\n" + buildCdBlockedBanner(newCwd) + BELL);
+                            continue;   // do NOT execute the cd
+                        }
+
+                        // Safe cd — update tracking and execute
+                        previousCwd = trackedCwd;
+                        trackedCwd = newCwd;
+                        ptyProc.write(ch);
+                        continue;
+                    }
+
+                    // ── 2. Workspace confinement: non-cd commands ───────────────
+                    // If the tracked CWD is somehow outside /workspace (e.g. a
+                    // script changed it under us), block all commands and force
+                    // the shell back.
+                    if (!isInsideWorkspace(trackedCwd)) {
+                        console.warn(
+                            `[WS][SANDBOX] Blocked cmd outside workspace ` +
+                            `cwd="${trackedCwd}" cmd="${line}" session=${sessionId}`
+                        );
+                        ptyProc.write("\x15");
+                        ws.send("\r\n" + buildCwdErrorBanner(trackedCwd) + BELL);
+                        // Force the shell back into /workspace
+                        ptyProc.write(`cd ${WORKSPACE_ROOT}\r`);
+                        previousCwd = trackedCwd;
+                        trackedCwd = WORKSPACE_ROOT;
+                        continue;
+                    }
+
+                    // ── 3. RO_EXEC FS-mutation check ────────────────────────────
+                    if (isRoExec) {
+                        const reason = isFsMutating(line);
+                        if (reason) {
+                            console.warn(
+                                `[WS][RO_EXEC] Blocked command="${line}" ` +
+                                `session=${sessionId} reason=${reason}`
+                            );
+                            ptyProc.write("\x15");   // wipe readline buffer
+                            ws.send("\r\n" + buildErrorBanner(reason) + BELL);
+                            continue;
+                        }
+                    }
+
+                    // Safe — forward Enter to PTY normally
+                    ptyProc.write(ch);
                     continue;
                 }
 

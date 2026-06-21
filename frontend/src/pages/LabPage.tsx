@@ -48,7 +48,12 @@ const LabPage = () => {
 	const sessionIdRef = useRef<string | null>(null);
 	const initRef = useRef(false);
 
+	// In-memory cache of unsaved edits, keyed by filename
+	const fileCacheRef = useRef<Map<string, string>>(new Map());
 
+	// Ref that always holds the latest code value (avoids stale closure in handleFileSelect)
+	const codeRef = useRef(code);
+	useEffect(() => { codeRef.current = code; }, [code]);
 
 	// Derived: is current file read-only?
 	const isReadOnly = labType === "RO_EXEC" && selectedFile !== ".env";
@@ -57,7 +62,7 @@ const LabPage = () => {
 
 	useEffect(() => {
 		if (!labType) return;   // invalid URL — render guard below handles it
-		
+
 		if (initRef.current) return; // StrictMode double-invocation guard
 		initRef.current = true;
 
@@ -82,10 +87,28 @@ const LabPage = () => {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
+	// ── File selection (stash current edits, then load new file) ──────────────
+
+	/**
+	 * Call this instead of setSelectedFile directly so that the current file's
+	 * unsaved edits are preserved in the cache before the new file is loaded.
+	 */
+	const handleFileSelect = useCallback((newFile: string) => {
+		if (newFile === selectedFile) return;
+		// Stash current edits
+		fileCacheRef.current.set(selectedFile, codeRef.current);
+		setSelectedFile(newFile);
+	}, [selectedFile]);
+
 	// ── Load file ─────────────────────────────────────────────────────────────
 
 	useEffect(() => {
 		if (!sessionId || !selectedFile) return;
+		// Serve from cache first so unsaved edits are never lost
+		if (fileCacheRef.current.has(selectedFile)) {
+			setCode(fileCacheRef.current.get(selectedFile)!);
+			return;
+		}
 		labApi.readFile(sessionId, selectedFile)
 			.then(({ content }) => setCode(content))
 			.catch(() => setCode(""));
@@ -98,6 +121,8 @@ const LabPage = () => {
 		setSaving(true);
 		try {
 			await labApi.saveFile(sessionId, selectedFile, code);
+			// Clear the cache entry — the file on disk is now up-to-date
+			fileCacheRef.current.delete(selectedFile);
 			setSaveStatus("saved");
 			setTimeout(() => setSaveStatus("idle"), 1500);
 		} catch {
@@ -314,7 +339,7 @@ const LabPage = () => {
 						<FileTree
 							sessionId={sessionId}
 							selectedFile={selectedFile}
-							onSelect={setSelectedFile}
+							onSelect={handleFileSelect}
 							labType={labType}
 						/>
 					</aside>

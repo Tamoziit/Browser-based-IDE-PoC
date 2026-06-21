@@ -210,7 +210,7 @@ export const destroyContainer = async (containerId: string): Promise<void> => {
         const container = docker.getContainer(containerId);
         await container.stop({ t: 3 }).catch(() => { });
         await container.remove({ force: true }).catch(() => { });
-        
+
         console.log(`[Cleanup] Destroyed container=${containerId.slice(0, 12)}`);
     } catch (err) {
         console.error("[Cleanup] Failed to destroy container:", err);
