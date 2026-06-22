@@ -6,80 +6,17 @@ import { posix as posixPath } from "path";
 import type { WsMessage } from "../types/index.d.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RO_EXEC terminal guard
+// Workspace confinement (RWX only)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Commands (and shell constructs) that mutate the filesystem.
- *
- * Each entry is tested as a whole token at the start of a pipeline stage,
- * so "touch" blocks "touch foo" but not "cat something | touch" (which we
- * also catch because "touch" appears as a stage-start token after "|").
- *
- * Redirect operators (> and >>) are caught separately via regex.
- */
-const FS_MUTATING_CMDS = new Set([
-    // creation / directory
-    "touch", "mkdir", "mkfifo", "mknod", "install",
-    // deletion
-    "rm", "rmdir", "unlink", "shred", "wipe",
-    // copy / move / rename
-    "cp", "mv", "rsync", "rename",
-    // permission / ownership
-    "chmod", "chown", "chgrp",
-    // low-level write
-    "dd", "tee", "truncate",
-    // link
-    "ln",
-    // python / node one-liners that open files for writing are harder to
-    // catch syntactically, so we leave them to the :ro bind-mount kernel guard
-]);
-
-/**
- * Check a single assembled command-line for FS-mutating operations.
- * Returns a human-readable reason string, or null if the line is safe.
- */
-function isFsMutating(line: string): string | null {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) return null;          // blank / comment
-
-    // Output redirection:  cmd > file  or  cmd >> file
-    // (must come before token split to catch:  echo hi > foo)
-    if (/(?:^|[^<>])>{1,2}(?!>)/.test(trimmed)) {
-        return "output redirection (> / >>) is not permitted";
-    }
-
-    // Split on pipes, semicolons, &&, || — then inspect first token of each stage
-    const stages = trimmed.split(/[|;&]|\s*&&\s*|\s*\|\|\s*/);
-    for (const stage of stages) {
-        const firstToken = stage.trim().split(/\s+/)[0]?.toLowerCase();
-        if (firstToken && FS_MUTATING_CMDS.has(firstToken)) {
-            return `\`${firstToken}\` is not permitted in Read-Only labs`;
-        }
-    }
-
-    return null;
-}
+const WORKSPACE_ROOT = "/workspace";
+const CONTAINER_HOME = "/root";   // default $HOME for root inside Docker
 
 // ANSI helpers
 const RED = "\x1b[31m";
 const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 const BELL = "\x07";
-
-function buildErrorBanner(reason: string): string {
-    return (
-        `\r\n${RED}[RO_EXEC] Blocked: ${reason}.${RESET}\r\n` +
-        `${YELLOW}Hint: This is a Read-Only lab — filesystem modifications are not allowed.${RESET}\r\n`
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Workspace confinement
-// ─────────────────────────────────────────────────────────────────────────────
-
-const WORKSPACE_ROOT = "/workspace";
-const CONTAINER_HOME = "/root";   // default $HOME for root inside Docker
 
 /**
  * If `line` is a plain `cd` command, returns the argument string
@@ -153,10 +90,20 @@ const initTerminalWS = (httpServer: Server): void => {
             return;
         }
 
-        const isRoExec = session.labType === "RO_EXEC";
+        // ── RO_EXEC: terminal access is completely forbidden ──────────────────
+        // The only permitted execution path for RO_EXEC labs is the built-in
+        // Run button (POST /api/labs/:sessionId/run). No PTY is spawned.
+        if (session.labType === "RO_EXEC") {
+            console.warn(
+                `[WS] Rejected terminal connection for RO_EXEC session=${sessionId}`
+            );
+            ws.close(4403, "Terminal access is not available in Read-Only & Execute labs.");
+            return;
+        }
+
         console.log(`[WS] Terminal connected session=${sessionId} labType=${session.labType}`);
 
-        // Spawn docker exec bash PTY
+        // Spawn docker exec bash PTY (RWX only)
         let ptyProc: pty.IPty;
         try {
             ptyProc = pty.spawn("docker", [
@@ -190,14 +137,9 @@ const initTerminalWS = (httpServer: Server): void => {
         });
 
         // ── Per-connection line buffer ─────────────────────────────────────────
-        // All input (both RWX and RO_EXEC) is buffered character-by-character.
-        // On Enter we inspect the assembled line before forwarding it to the PTY:
-        //
-        //   1. Workspace confinement  — cd commands are resolved and blocked if
-        //      they would escape /workspace; any other command is blocked when
-        //      the tracked CWD is already outside /workspace.
-        //   2. RO_EXEC FS-mutation check — applied on top of confinement.
-        //
+        // Input is buffered character-by-character.
+        // On Enter we inspect the assembled line for workspace confinement before
+        // forwarding it to the PTY.
         // Non-printable control sequences (ESC, Ctrl-C, etc.) are forwarded
         // immediately as before.
         let lineBuffer = "";
@@ -276,20 +218,6 @@ const initTerminalWS = (httpServer: Server): void => {
                         previousCwd = trackedCwd;
                         trackedCwd = WORKSPACE_ROOT;
                         continue;
-                    }
-
-                    // ── 3. RO_EXEC FS-mutation check ────────────────────────────
-                    if (isRoExec) {
-                        const reason = isFsMutating(line);
-                        if (reason) {
-                            console.warn(
-                                `[WS][RO_EXEC] Blocked command="${line}" ` +
-                                `session=${sessionId} reason=${reason}`
-                            );
-                            ptyProc.write("\x15");   // wipe readline buffer
-                            ws.send("\r\n" + buildErrorBanner(reason) + BELL);
-                            continue;
-                        }
                     }
 
                     // Safe — forward Enter to PTY normally

@@ -35,7 +35,10 @@ const LabPage = () => {
 	const [saving, setSaving] = useState(false);
 	const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
-	const [activeTab, setActiveTab] = useState<TabId>("terminal");
+	// RO_EXEC: output-only pane; RWX: terminal + output tabs
+	const [activeTab, setActiveTab] = useState<TabId>(
+		labType === "RO_EXEC" ? "output" : "terminal"
+	);
 	const [output, setOutput] = useState<string>("");
 	const [running, setRunning] = useState(false);
 
@@ -148,7 +151,11 @@ const LabPage = () => {
 		setActiveTab("output");
 		setOutput("Running…\n");
 		try {
-			await labApi.saveFile(sessionId, selectedFile, code);
+			// RO_EXEC: files are protected — skip the pre-run save entirely.
+			// The container already has the correct read-only workspace on disk.
+			if (!isReadOnly) {
+				await labApi.saveFile(sessionId, selectedFile, code);
+			}
 			const { output: out } = await labApi.runCode(sessionId);
 			setOutput(out || "(no output)");
 		} catch (err: any) {
@@ -156,7 +163,7 @@ const LabPage = () => {
 		} finally {
 			setRunning(false);
 		}
-	}, [sessionId, running, selectedFile, code]);
+	}, [sessionId, running, selectedFile, code, isReadOnly]);
 
 	// ── Session termination ───────────────────────────────────────────────────
 
@@ -355,24 +362,39 @@ const LabPage = () => {
 
 				{/* ── Bottom Pane ── */}
 				<div className="bottom-pane">
-					<div className="pane-tabs">
-						<button
-							className={`pane-tab ${activeTab === "terminal" ? "active" : ""}`}
-							onClick={() => setActiveTab("terminal")}
-						>Terminal</button>
-						<button
-							className={`pane-tab ${activeTab === "output" ? "active" : ""}`}
-							onClick={() => setActiveTab("output")}
-						>Output</button>
-					</div>
-					<div className="pane-content">
-						<div style={{ display: activeTab === "terminal" ? "block" : "none", height: "100%" }}>
-							<TerminalPanel sessionId={sessionId} />
-						</div>
-						{activeTab === "output" && (
-							<pre className="output-panel">{output}</pre>
-						)}
-					</div>
+					{/* RO_EXEC: output-only — no tab bar, no terminal */}
+					{labType === "RO_EXEC" ? (
+						<>
+							<div className="pane-tabs">
+								<button className="pane-tab active">Output</button>
+							</div>
+							<div className="pane-content">
+								<pre className="output-panel">{output || "(Run your code to see output here)"}</pre>
+							</div>
+						</>
+					) : (
+						/* RWX: terminal + output tabs */
+						<>
+							<div className="pane-tabs">
+								<button
+									className={`pane-tab ${activeTab === "terminal" ? "active" : ""}`}
+									onClick={() => setActiveTab("terminal")}
+								>Terminal</button>
+								<button
+									className={`pane-tab ${activeTab === "output" ? "active" : ""}`}
+									onClick={() => setActiveTab("output")}
+								>Output</button>
+							</div>
+							<div className="pane-content">
+								<div style={{ display: activeTab === "terminal" ? "block" : "none", height: "100%" }}>
+									<TerminalPanel sessionId={sessionId} />
+								</div>
+								{activeTab === "output" && (
+									<pre className="output-panel">{output}</pre>
+								)}
+							</div>
+						</>
+					)}
 				</div>
 
 			</div>
