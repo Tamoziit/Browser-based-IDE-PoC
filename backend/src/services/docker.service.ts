@@ -7,7 +7,7 @@ import { redis, SESSION_TTL } from "../config/redis.js";
 import Session from "../models/session.model.js";
 import { PassThrough } from "stream";
 
-const docker = new Docker({ socketPath: "/var/run/docker.sock" });
+export const docker = new Docker({ socketPath: "/var/run/docker.sock" });
 
 const RUNTIME_IMAGES: Record<string, string> = {
     python: "lms-python"

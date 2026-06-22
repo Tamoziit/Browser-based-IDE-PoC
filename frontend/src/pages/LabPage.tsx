@@ -41,6 +41,10 @@ const LabPage = () => {
 	);
 	const [output, setOutput] = useState<string>("");
 	const [running, setRunning] = useState(false);
+	const [ws, setWs] = useState<WebSocket | null>(null);
+
+	// Output buffer to prevent React from freezing on fast streams (infinite loops)
+	const outputBufferRef = useRef<string>("");
 
 	// Termination
 	const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
@@ -89,6 +93,66 @@ const LabPage = () => {
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
+
+	// ── WebSocket ────────────────────────────────────────────────────────────
+
+	useEffect(() => {
+		if (!sessionId) return;
+		
+		const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+		const socket = new WebSocket(`${proto}//${window.location.host}/ws?session=${sessionId}`);
+		setWs(socket);
+
+		let updateTimer: NodeJS.Timeout | null = null;
+
+		const flushBuffer = () => {
+			if (outputBufferRef.current.length > 0) {
+				const currentText = outputBufferRef.current;
+				setOutput((prev) => {
+					let next = prev + currentText;
+					// Cap length to prevent browser OOM
+					if (next.length > 50000) {
+						next = "[...truncated...]\n" + next.slice(-50000);
+					}
+					return next;
+				});
+				outputBufferRef.current = "";
+			}
+		};
+
+		const handleMessage = (event: MessageEvent<string>) => {
+			if (event.data.startsWith("{") && event.data.endsWith("}")) {
+				try {
+					const msg = JSON.parse(event.data);
+					if (msg.type === "output") {
+						outputBufferRef.current += msg.data;
+						if (!updateTimer) {
+							updateTimer = setTimeout(() => {
+								flushBuffer();
+								updateTimer = null;
+							}, 50); // flush at most 20 times per second
+						}
+					} else if (msg.type === "exit") {
+						flushBuffer();
+						setRunning(false);
+					} else if (msg.type === "run_error") {
+						flushBuffer();
+						setOutput((prev) => prev + `\n[Error: ${msg.message}]\n`);
+						setRunning(false);
+					}
+				} catch { /* ignore */ }
+			}
+		};
+
+		socket.addEventListener("message", handleMessage);
+
+		return () => {
+			if (updateTimer) clearTimeout(updateTimer);
+			socket.removeEventListener("message", handleMessage);
+			socket.close();
+			setWs(null);
+		};
+	}, [sessionId]);
 
 	// ── File selection (stash current edits, then load new file) ──────────────
 
@@ -146,24 +210,27 @@ const LabPage = () => {
 	// ── Run ──────────────────────────────────────────────────────────────────
 
 	const handleRun = useCallback(async () => {
-		if (!sessionId || running) return;
+		if (!sessionId || running || !ws) return;
 		setRunning(true);
 		setActiveTab("output");
 		setOutput("Running…\n");
 		try {
 			// RO_EXEC: files are protected — skip the pre-run save entirely.
-			// The container already has the correct read-only workspace on disk.
 			if (!isReadOnly) {
 				await labApi.saveFile(sessionId, selectedFile, code);
 			}
-			const { output: out } = await labApi.runCode(sessionId);
-			setOutput(out || "(no output)");
+			ws.send(JSON.stringify({ type: "run" }));
 		} catch (err: any) {
-			setOutput(`Error: ${err.message}`);
-		} finally {
+			setOutput((prev) => prev + `\n[Error: ${err.message}]`);
 			setRunning(false);
 		}
-	}, [sessionId, running, selectedFile, code, isReadOnly]);
+	}, [sessionId, running, ws, selectedFile, code, isReadOnly]);
+
+	const handleKill = useCallback(() => {
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify({ type: "kill" }));
+		}
+	}, [ws]);
 
 	// ── Session termination ───────────────────────────────────────────────────
 
@@ -326,9 +393,15 @@ const LabPage = () => {
 								{saving ? "Saving…" : "Save"}
 							</button>
 						)}
-						<button className="btn btn-run" onClick={handleRun} disabled={running}>
-							{running ? "Running…" : "▶ Run"}
-						</button>
+						{running ? (
+							<button className="btn btn-run" style={{ backgroundColor: "#da3633", borderColor: "#da3633" }} onClick={handleKill}>
+								◼ Stop
+							</button>
+						) : (
+							<button className="btn btn-run" onClick={handleRun}>
+								▶ Run
+							</button>
+						)}
 						<button
 							id="btn-submit"
 							className="btn btn-submit"
@@ -387,7 +460,7 @@ const LabPage = () => {
 							</div>
 							<div className="pane-content">
 								<div style={{ display: activeTab === "terminal" ? "block" : "none", height: "100%" }}>
-									<TerminalPanel sessionId={sessionId} />
+									{ws && <TerminalPanel sessionId={sessionId} ws={ws} />}
 								</div>
 								{activeTab === "output" && (
 									<pre className="output-panel">{output}</pre>

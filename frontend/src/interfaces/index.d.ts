@@ -9,6 +9,7 @@ export interface FileEntry {
 
 export interface TerminalProps {
     sessionId: string;
+    ws?: WebSocket | null;
 }
 
 export interface MonacoEditorProps {
@@ -27,3 +28,46 @@ export interface FileTreeProps {
 }
 
 export type TabId = "terminal" | "output";
+
+export interface ResizeMessage {
+    type: "resize";
+    cols: number;
+    rows: number;
+}
+
+export interface InputMessage {
+    type: "input";
+    data: string;
+}
+
+export interface RunMessage {
+    type: "run";
+}
+
+export interface KillMessage {
+    type: "kill";
+}
+
+export interface OutputMessage {
+    type: "output";
+    data: string;
+}
+
+export interface ExitMessage {
+    type: "exit";
+    code: number | null;
+}
+
+export interface RunErrorMessage {
+    type: "run_error";
+    message: string;
+}
+
+export type WsMessage = 
+    | ResizeMessage 
+    | InputMessage 
+    | RunMessage 
+    | KillMessage 
+    | OutputMessage 
+    | ExitMessage 
+    | RunErrorMessage;

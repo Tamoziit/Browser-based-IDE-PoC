@@ -54,4 +54,34 @@ export interface InputMessage {
     data: string;
 }
 
-export type WsMessage = ResizeMessage | InputMessage;
+export interface RunMessage {
+    type: "run";
+}
+
+export interface KillMessage {
+    type: "kill";
+}
+
+export interface OutputMessage {
+    type: "output";
+    data: string;
+}
+
+export interface ExitMessage {
+    type: "exit";
+    code: number | null;
+}
+
+export interface RunErrorMessage {
+    type: "run_error";
+    message: string;
+}
+
+export type WsMessage = 
+    | ResizeMessage 
+    | InputMessage 
+    | RunMessage 
+    | KillMessage 
+    | OutputMessage 
+    | ExitMessage 
+    | RunErrorMessage;
