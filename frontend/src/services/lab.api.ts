@@ -59,4 +59,10 @@ export const labApi = {
         if (!res.ok) throw new Error(await res.text());
         return res.json();
     },
+
+    async submitLab(sessionId: string): Promise<{ score: number, maxScore: number, percentage: number, results: { step: string, passed: boolean, details?: string }[] }> {
+        const res = await fetch(`${BASE}/labs/${sessionId}/submit`, { method: "POST" });
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+    },
 };

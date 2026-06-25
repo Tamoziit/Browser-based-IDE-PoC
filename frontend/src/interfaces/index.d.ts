@@ -63,11 +63,20 @@ export interface RunErrorMessage {
     message: string;
 }
 
-export type WsMessage = 
-    | ResizeMessage 
-    | InputMessage 
-    | RunMessage 
-    | KillMessage 
-    | OutputMessage 
-    | ExitMessage 
+export type WsMessage =
+    | ResizeMessage
+    | InputMessage
+    | RunMessage
+    | KillMessage
+    | OutputMessage
+    | ExitMessage
     | RunErrorMessage;
+
+export type ConfirmAction = "back" | "submit" | null;
+
+export interface SubmissionResult {
+    score: number;
+    maxScore: number;
+    percentage: number;
+    results: { step: string; passed: boolean; details?: string }[];
+}

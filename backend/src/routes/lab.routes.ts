@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import type { LabCreationProps, SessionParams } from "../types/index.d.ts";
 import { getSession, runCode, startLab, stopLab } from "../services/docker.service.js";
+import { evaluateLab } from "../services/evaluation.service.js";
 import { blockDownload } from "../middleware/permissions.js";
 
 const router = express.Router();
@@ -97,6 +98,29 @@ router.delete(
     ) => {
         await stopLab(req.params.sessionId);
         res.status(200).json({ ok: true });
+    }
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/labs/:sessionId/submit
+// ─────────────────────────────────────────────────────────────────────────────
+router.post(
+    "/labs/:sessionId/submit",
+    async (
+        req: Request<SessionParams>,
+        res: Response
+    ) => {
+        try {
+            const result = await evaluateLab(req.params.sessionId);
+            
+            // End the lab and cleanup resources immediately after evaluating
+            await stopLab(req.params.sessionId);
+
+            res.status(200).json(result);
+        } catch (error: any) {
+            console.error("[Route] submitLab error:", error);
+            res.status(500).json({ error: error.message });
+        }
     }
 );
 

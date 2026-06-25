@@ -5,15 +5,14 @@ import FileTree from "../components/FileTree";
 import MonacoEditor from "../components/MonacoEditor";
 import TerminalPanel from "../components/Terminal";
 import { labApi } from "../services/lab.api";
-import type { LabType, TabId } from "../interfaces";
+import type { ConfirmAction, LabType, SubmissionResult, TabId } from "../interfaces";
+import ResultPanel from "../components/ResultPanel";
 
 // For the PoC: hardcoded user/lab IDs
 const DEMO_USER_ID = "user-demo";
 const DEMO_LAB_ID = "lab-001";
 
 const VALID_LAB_TYPES: LabType[] = ["RO_EXEC", "RWX"];
-
-type ConfirmAction = "back" | "submit" | null;
 
 const LabPage = () => {
 	// ── Routing ──────────────────────────────────────────────────────────────
@@ -50,6 +49,8 @@ const LabPage = () => {
 	const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
 	const [terminating, setTerminating] = useState(false);
 	const [submitted, setSubmitted] = useState(false);
+	const [submitting, setSubmitting] = useState(false);
+	const [submissionResult, setSubmissionResult] = useState<SubmissionResult | null>(null);
 
 	// Stable refs to prevent double-execution and double-cleanup
 	const sessionIdRef = useRef<string | null>(null);
@@ -98,12 +99,12 @@ const LabPage = () => {
 
 	useEffect(() => {
 		if (!sessionId) return;
-		
+
 		const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
 		const socket = new WebSocket(`${proto}//${window.location.host}/ws?session=${sessionId}`);
 		setWs(socket);
 
-		let updateTimer: NodeJS.Timeout | null = null;
+		let updateTimer: ReturnType<typeof setTimeout> | null = null;
 
 		const flushBuffer = () => {
 			if (outputBufferRef.current.length > 0) {
@@ -254,10 +255,26 @@ const LabPage = () => {
 	/** Submit: terminate → show success flash → navigate to "/" */
 	const handleConfirmSubmit = useCallback(async () => {
 		setConfirmAction(null);
-		await terminateSession();
-		setSubmitted(true);
-		setTimeout(() => navigate("/", { replace: true }), 2000);
-	}, [terminateSession, navigate]);
+		setSubmitting(true);
+		const sid = sessionIdRef.current;
+		if (!sid) return;
+
+		try {
+			// Ensure files are saved before submitting if RWX
+			if (!isReadOnly) {
+				await labApi.saveFile(sid, selectedFile, code);
+			}
+
+			const result = await labApi.submitLab(sid);
+			setSubmissionResult(result);
+			sessionIdRef.current = null; // Session is already stopped by backend
+			setSubmitted(true);
+		} catch (err: any) {
+			setError(`Submission failed: ${err.message}`);
+		} finally {
+			setSubmitting(false);
+		}
+	}, [code, isReadOnly, selectedFile]);
 
 	// ── Render guards ─────────────────────────────────────────────────────────
 
@@ -282,7 +299,7 @@ const LabPage = () => {
 		);
 	}
 
-	if (terminating && !submitted) {
+	if (terminating && !submitted && !submitting) {
 		return (
 			<div className="boot-screen">
 				<div className="boot-spinner" />
@@ -291,16 +308,22 @@ const LabPage = () => {
 		);
 	}
 
-	if (submitted) {
+	if (submitting) {
 		return (
-			<div className="boot-screen submitted-screen">
-				<div className="submitted-icon">✓</div>
-				<h2 className="submitted-title">Lab Submitted</h2>
-				<p className="submitted-sub">Your session has been recorded. Returning to selection…</p>
+			<div className="boot-screen">
+				<div className="boot-spinner" />
+				<p>Evaluating submission…</p>
 			</div>
 		);
 	}
 
+	if (submitted && submissionResult) {
+		return (
+			<ResultPanel
+				submissionResult={submissionResult}
+			/>
+		);
+	}
 
 
 	// ── Main Layout ───────────────────────────────────────────────────────────

@@ -77,11 +77,22 @@ export interface RunErrorMessage {
     message: string;
 }
 
-export type WsMessage = 
-    | ResizeMessage 
-    | InputMessage 
-    | RunMessage 
-    | KillMessage 
-    | OutputMessage 
-    | ExitMessage 
+export type WsMessage =
+    | ResizeMessage
+    | InputMessage
+    | RunMessage
+    | KillMessage
+    | OutputMessage
+    | ExitMessage
     | RunErrorMessage;
+
+export interface EvaluationResult {
+    score: number;
+    maxScore: number;
+    percentage: number;
+    results: {
+        step: string;
+        passed: boolean;
+        details?: string;
+    }[];
+}
