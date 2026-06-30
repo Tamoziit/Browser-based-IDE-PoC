@@ -1,51 +1,54 @@
 import mongoose from "mongoose";
-import type { ISession } from "../types/index.d.ts";
+import type { ISession } from "../types";
 
 const SessionSchema = new mongoose.Schema<ISession>({
-    sessionId: {
-        type: String,
-        required: true,
-        unique: true,
-        index: true
-    },
-    userId: {
-        type: String,
-        required: true
-    },
-    labId: {
-        type: String,
-        required: true
-    },
-    runtime: {
-        type: String,
-        required: true
-    },
-    containerId: {
-        type: String,
-        required: true
-    },
-    workspacePath: {
-        type: String,
-        required: true
-    },
-    labType: {
-        type: String,
-        enum: ["RO_EXEC", "RWX"],
-        required: true,
-        default: "RWX"
-    },
-    workspaceSnapshot: {
-        type: String
-    },
-    status: {
-        type: String,
-        enum: ["RUNNING", "STOPPED"],
-        default: "RUNNING"
-    },
-    endedAt: {
-        type: Date
-    }
+	sessionId: {
+		type: String,
+		required: true,
+		unique: true,
+		index: true
+	},
+	userId: {
+		type: String, required: true
+	},
+	labId: {
+		type: String,
+		required: true
+	},
+	runtime: {
+		type: String,
+		required: true
+	},
+	podName: {
+		type: String,
+		required: true
+	},  // lab-<sessionId>
+	pvcName: {
+		type: String,
+		required: true
+	},  // lab-pvc-<sessionId>
+	workspacePath: {
+		type: String,
+		required: true
+	},
+	labType: {
+		type: String,
+		enum: ["RO_EXEC", "RWX"],
+		required: true,
+		default: "RWX",
+	},
+	workspaceSnapshot: {
+		type: String
+	},
+	status: {
+		type: String,
+		enum: ["RUNNING", "STOPPED"],
+		default: "RUNNING",
+	},
+	endedAt: {
+		type: Date
+	},
 }, { timestamps: true });
 
 const Session = mongoose.model<ISession>("Session", SessionSchema);
-export default Session;
+export default Session;

@@ -2,12 +2,34 @@ import type { Document } from "mongoose";
 
 export type LabType = "RO_EXEC" | "RWX";
 
+export interface AdminToken {
+    password: string;
+}
+
+export interface User {
+    _id: Types.ObjectId;
+    fullName: string;
+    username: string;
+    email: string;
+    password: string;
+    mobileNo?: string | null;
+    profilePic?: string | null;
+    gender?: "M" | "F" | "O" | null;
+}
+
+declare module "express" {
+    export interface Request {
+        user?: User;
+    }
+}
+
 export interface ISession extends Document {
     sessionId: string;
     userId: string;
     labId: string;
     runtime: string;
-    containerId: string;
+    podName: string;
+    pvcName: string;
     workspacePath: string;
     workspaceSnapshot?: string;
     labType: LabType;
@@ -20,7 +42,8 @@ export interface LabSession {
     sessionId: string;
     userId: string;
     labId: string;
-    containerId: string;
+    podName: string;
+    pvcName: string;
     workspacePath: string;
     runtime: string;
     labType: LabType;
@@ -28,10 +51,8 @@ export interface LabSession {
 }
 
 export interface LabCreationProps {
-    userId: string;
     labId: string;
     runtime?: string;
-    labType?: LabType;
 }
 
 export interface SessionParams {
@@ -43,6 +64,7 @@ export interface FileContentProps {
     content?: string;
 }
 
+// ── Socket.io message types ───────────────────────────────────────────────────
 export interface ResizeMessage {
     type: "resize";
     cols: number;
@@ -95,4 +117,16 @@ export interface EvaluationResult {
         passed: boolean;
         details?: string;
     }[];
+}
+
+export interface TerminalState {
+    session: LabSession;
+    stdinStream: PassThrough;
+    stdoutStream: PassThrough;
+    execWebSocket: any;
+    runExecWs: any;
+    runTimeout: ReturnType<typeof setTimeout> | null;
+    lineBuffer: string;
+    trackedCwd: string;
+    previousCwd: string;
 }

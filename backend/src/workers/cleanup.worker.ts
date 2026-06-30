@@ -1,50 +1,35 @@
 import { Redis } from "ioredis";
-import Session from "../models/session.model.js";
-import { destroyContainer } from "../services/docker.service.js";
+import { EXPIRED_KEY_CHANNEL, handleExpiredKey, recoverMissedSessions } from "../utils/cleanupUtils";
 
-// IMPORTANT: pub/sub requires a *dedicated* Redis connection.
-// We cannot use the shared `redis` instance for subscribe().
-const subscriber = new Redis(process.env.REDIS_URL!);
+const startCleanupWorker = async (): Promise<void> => {
+    // recovering any sessions missed while worker was offline
+    await recoverMissedSessions();
 
-const EXPIRED_KEY_CHANNEL = "__keyevent@0__:expired";
+    // spinning up a dedicated subscriber connection
+    // Redis requires a separate connection for pub/sub — a subscribed client can't issue regular commands.
+    const subscriber = new Redis(process.env.REDIS_URL!, {
+        lazyConnect: false,
+        enableReadyCheck: true,
+        retryStrategy: (times) => Math.min(times * 200, 3000),
+    });
 
-export async function startCleanupWorker(): Promise<void> {
-    // redis-server is started with --notify-keyspace-events Ex in docker-compose.
-    // This programmatic SET is a belt-and-suspenders approach for cases where
-    // the redis instance is not ours to configure.
-    try {
-        await subscriber.config("SET", "notify-keyspace-events", "Ex");
-    } catch {
-        // Redis in protected mode may not allow CONFIG — rely on the compose flag
-        console.warn("[Cleanup] Could not set notify-keyspace-events via CONFIG — relying on server config");
-    }
+    subscriber.on("connect", () => console.log("[Cleanup] Subscriber connected"));
+    subscriber.on("ready", () => console.log("[Cleanup] Subscriber ready"));
+    subscriber.on("error", (err) => console.error("[Cleanup] Subscriber error:", err.message));
+    subscriber.on("reconnecting", () => console.log("[Cleanup] Subscriber reconnecting..."));
+
+    // Confirming the subscription actually registered
+    subscriber.on("subscribe", (channel, count) => {
+        console.log(`[Cleanup] Subscribed to '${channel}' (active subscriptions: ${count})`);
+    });
 
     await subscriber.subscribe(EXPIRED_KEY_CHANNEL);
 
-    subscriber.on("message", async (channel: string, key: string) => {
-        if (channel !== EXPIRED_KEY_CHANNEL) return;
-        if (!key.startsWith("lab:session:")) return;
-
-        const sessionId = key.replace("lab:session:", "");
-        console.log(`[Cleanup] Session expired: ${sessionId}`);
-
-        // At this point the Redis key is already gone — look up containerId from Mongo
-        const record = await Session.findOne({ sessionId, status: "RUNNING" });
-        if (!record) return;
-
-        await destroyContainer(record.containerId);
-
-        await Session.updateOne(
-            { sessionId },
-            { $set: { status: "STOPPED", endedAt: new Date() } }
-        );
-
-        console.log(`[Cleanup] Session ${sessionId} finalized`);
-    });
-
-    subscriber.on("error", (err) => {
-        console.error("[Cleanup] Redis subscriber error:", err);
+    subscriber.on("message", async (_channel: string, key: string) => {
+        await handleExpiredKey(key);
     });
 
     console.log("[Cleanup] Worker listening for expired keys");
 }
+
+export default startCleanupWorker;

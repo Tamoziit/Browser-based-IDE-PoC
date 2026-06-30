@@ -1,78 +1,54 @@
-import { spawn } from "child_process";
-import path from "path";
 import cron from "node-cron";
-import fs from "fs/promises";
-import { createWriteStream } from "fs";
-import Session from "../models/session.model.js";
+import Session from "../models/session.model";
+import { getSession } from "../services/k8s.service";
+import snapshotWorkspace from "../services/snapshot.service";
+import pLimit from "p-limit";
 
-export function startSnapshotCron(): void {
-    const snapshotsDir = path.resolve(process.env.SNAPSHOTS_DIR ?? "./snapshots");
+let isRunning = false;
 
-    cron.schedule("*/5 * * * *", async () => {
-        // Top-level catch — node-cron silently swallows unhandled rejections,
-        // so we always log failures explicitly.
+const startSnapshotCron = (): void => {
+    cron.schedule("*/2 * * * *", async () => {
+        if (isRunning) {
+            console.log("[Snapshot] Skipping — previous run still in progress.");
+            return;
+        }
+        isRunning = true;
+        const cronStart = Date.now();
+
         try {
-            console.log("[Snapshot] Running scheduled workspace snapshot...");
-
-            await fs.mkdir(snapshotsDir, { recursive: true });
-
             const activeSessions = await Session.find({ status: "RUNNING" });
-
             if (activeSessions.length === 0) {
-                console.log("[Snapshot] No active sessions — nothing to snapshot.");
+                console.log("[Snapshot] No active sessions.");
                 return;
             }
 
-            for (const record of activeSessions) {
-                const snapshotPath = path.join(snapshotsDir, `${record.sessionId}.tar.gz`);
+            console.log(`[Snapshot] Snapshotting ${activeSessions.length} session(s)...`);
 
-                try {
-                    // Use `docker cp` to stream /workspace out of the running container.
-                    // This works regardless of whether the backend itself is containerised,
-                    // because we only need access to the Docker socket — not the host path.
-                    //
-                    // `docker cp <id>:/workspace/. -` writes a tar stream to stdout;
-                    // we pipe it straight to disk as the snapshot archive.
-                    await new Promise<void>((resolve, reject) => {
-                        const dockerCp = spawn("docker", [
-                            "cp",
-                            `${record.containerId}:/workspace/.`,
-                            "-",   // stream tar to stdout
-                        ]);
-
-                        const out = createWriteStream(snapshotPath);
-                        dockerCp.stdout.pipe(out);
-
-                        let stderr = "";
-                        dockerCp.stderr.on("data", (chunk: Buffer) => {
-                            stderr += chunk.toString();
-                        });
-
-                        dockerCp.on("close", (code) => {
-                            if (code === 0) {
-                                resolve();
-                            } else {
-                                reject(new Error(`docker cp exited ${code}: ${stderr.trim()}`));
-                            }
-                        });
-
-                        dockerCp.on("error", reject);
-                    });
-
-                    await Session.updateOne(
-                        { sessionId: record.sessionId },
-                        { $set: { workspaceSnapshot: snapshotPath } }
-                    );
-
-                    console.log(`[Snapshot] OK: ${record.sessionId} → ${snapshotPath}`);
-                } catch (err) {
-                    console.error(`[Snapshot] Failed for ${record.sessionId}:`, err);
-                }
-            }
+            const limit = pLimit(5);  // 5 concurrent tar+upload streams
+            await Promise.all(
+                activeSessions.map((record) =>
+                    limit(async () => {
+                        const session = await getSession(record.sessionId);
+                        if (!session) return;
+                        const t = Date.now();
+                        try {
+                            await snapshotWorkspace(session);
+                            console.log(`[Snapshot] ${record.sessionId} done in ${Date.now() - t}ms`);
+                        } catch (err) {
+                            console.error(`[Snapshot] Failed for ${record.sessionId}:`, err);
+                        }
+                    })
+                )
+            );
         } catch (err) {
-            console.error("[Snapshot] Cron job crashed:", err);
+            console.error("[Snapshot] Cron crashed:", err);
+        } finally {
+            console.log(`[Snapshot] Cron tick finished in ${Date.now() - cronStart}ms`);
+            isRunning = false;
         }
     });
 
-    console.log("[Snapshot] Cron scheduled (every 5 min)");
-}
+    console.log("[Snapshot] Cron scheduled (every 2 min)");
+};
+
+export default startSnapshotCron;
