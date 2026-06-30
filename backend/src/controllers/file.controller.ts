@@ -6,14 +6,11 @@ import { FileContentProps } from "../types";
 export const getFileStructure = async (req: Request, res: Response) => {
     try {
         const session = await resolveSession(req.query.session as string, res);
-        if (!session) {
-            res.status(400).json({ error: "Error in resolving session data" });
-            return;
-        }
+        if (!session) return;
 
         const raw = await execInPod(session.podName, [
             "sh", "-c",
-            `ls -1p '${session.workspacePath}' 2>/dev/null || echo ""`
+            `ls -1pA '${session.workspacePath}' 2>/dev/null || echo ""`
         ]);
 
         const entries = raw
@@ -34,10 +31,7 @@ export const getFileStructure = async (req: Request, res: Response) => {
 export const getFileByPath = async (req: Request, res: Response) => {
     try {
         const session = await resolveSession(req.query.session as string, res);
-        if (!session) {
-            res.status(400).json({ error: "Error in resolving session data" });
-            return;
-        }
+        if (!session) return;
 
         const filePath = req.query.path as string;
 
@@ -62,10 +56,7 @@ export const getFileByPath = async (req: Request, res: Response) => {
 export const updateFile = async (req: Request, res: Response) => {
     try {
         const session = await resolveSession(req.query.session as string, res);
-        if (!session) {
-            res.status(400).json({ error: "Error in resolving session data" });
-            return;
-        }
+        if (!session) return;
 
         const filePath = req.query.path as string;
         const { content } = req.body as { content: string };
@@ -91,10 +82,7 @@ export const updateFile = async (req: Request, res: Response) => {
 export const createFile = async (req: Request, res: Response) => {
     try {
         const session = await resolveSession(req.query.session as string, res);
-        if (!session) {
-            res.status(400).json({ error: "Error in resolving session data" });
-            return;
-        }
+        if (!session) return;
 
         const { path: filePath, content = "" }: FileContentProps = req.body;
 
@@ -119,10 +107,7 @@ export const createFile = async (req: Request, res: Response) => {
 export const deleteFile = async (req: Request, res: Response) => {
     try {
         const session = await resolveSession(req.query.session as string, res);
-        if (!session) {
-            res.status(400).json({ error: "Error in resolving session data" });
-            return;
-        }
+        if (!session) return;
 
         const filePath = req.query.path as string;
 

@@ -6,12 +6,12 @@ let io: SocketServer;
 const initSocketServer = (httpServer: HttpServer): SocketServer => {
     io = new SocketServer(httpServer, {
         cors: {
-            origin: "*"
+            origin: "*",
         },
         transports: ["websocket", "polling"],
     });
 
     return io;
-}
+};
 
 export default initSocketServer;

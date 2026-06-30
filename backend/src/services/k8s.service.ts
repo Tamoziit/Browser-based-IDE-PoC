@@ -80,7 +80,6 @@ const buildPod = (
     const workspaceMount: k8s.V1VolumeMount = {
         name: "workspace",
         mountPath: "/workspace",
-        ...(labType === "RO_EXEC" ? { readOnly: true } : {}),
     };
 
     return {

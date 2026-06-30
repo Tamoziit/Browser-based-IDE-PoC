@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { useAuthContext } from "../context/AuthContext";
 import type { LabType } from "../interfaces";
 
 const RO_FEATURES = [
@@ -26,6 +27,7 @@ const RWX_FEATURES = [
 
 const LabSelectionPage = () => {
     const navigate = useNavigate();
+    const { authUser } = useAuthContext();
 
     const launch = (labType: LabType) => navigate(`/lab/${labType}`);
 
@@ -38,6 +40,11 @@ const LabSelectionPage = () => {
                 {/* Header */}
                 <div className="selection-header">
                     <span className="selection-logo">⬡ LMS Lab</span>
+                    {authUser && (
+                        <span className="selection-user-badge" title={`Logged in as ${authUser.username}`}>
+                            👤 {authUser.fullName}
+                        </span>
+                    )}
                     <h1 className="selection-title">Choose Your Lab Environment</h1>
                     <p className="selection-subtitle">
                         Select the workspace type that matches your session requirements.
