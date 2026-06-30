@@ -7,7 +7,7 @@ import pLimit from "p-limit";
 let isRunning = false;
 
 const startSnapshotCron = (): void => {
-    cron.schedule("*/2 * * * *", async () => {
+    cron.schedule("*/5 * * * *", async () => {
         if (isRunning) {
             console.log("[Snapshot] Skipping — previous run still in progress.");
             return;
@@ -48,7 +48,7 @@ const startSnapshotCron = (): void => {
         }
     });
 
-    console.log("[Snapshot] Cron scheduled (every 2 min)");
+    console.log("[Snapshot] Cron scheduled (every 5 min)");
 };
 
 export default startSnapshotCron;
